@@ -1,0 +1,996 @@
+<?php
+session_start();
+require_once '../config/database.php';
+
+// Cek jika sudah login
+if(isset($_SESSION['user_id'])) {
+    header("Location: dashboard.php");
+    exit();
+}
+
+$error = '';
+
+if($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $username = mysqli_real_escape_string($conn, $_POST['username']);
+    $password = md5($_POST['password']);
+    $role = mysqli_real_escape_string($conn, $_POST['role']);
+    
+    $query = "SELECT * FROM users WHERE username = '$username' AND password = '$password' AND role = '$role' AND is_active = 1";
+    $result = mysqli_query($conn, $query);
+    
+    if(mysqli_num_rows($result) == 1) {
+        $user = mysqli_fetch_assoc($result);
+        
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        $_SESSION['nama_lengkap'] = $user['nama_lengkap'];
+        $_SESSION['role'] = $user['role'];
+        $_SESSION['foto'] = $user['foto'];
+        
+        mysqli_query($conn, "UPDATE users SET last_login = NOW() WHERE id = ".$user['id']);
+        
+        mysqli_query($conn, "INSERT INTO log_aktivitas (user_id, aktivitas, detail, ip_address) VALUES (
+            ".$user['id'].", 
+            'Login', 
+            'User login sebagai ".$role."',
+            '".$_SERVER['REMOTE_ADDR']."'
+        )");
+        
+        header("Location: dashboard.php");
+        exit();
+    } else {
+        $error = "Invalid username or password!";
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>Login - majoo POS</title>
+    
+    <!-- Font Awesome 6 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #0A0A0A;
+            --secondary: #1E1E1E;
+            --accent: #00FFB2;
+            --accent-glow: rgba(0, 255, 178, 0.3);
+            --text-primary: #FFFFFF;
+            --text-secondary: #A0A0A0;
+            --border: #2A2A2A;
+            --success: #00FFB2;
+            --warning: #FFB800;
+            --danger: #FF4D4D;
+            --info: #3B82F6;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .bg-circle {
+            position: absolute;
+            border-radius: 50%;
+            background: var(--accent-glow);
+            filter: blur(80px);
+            animation: float 20s infinite;
+        }
+
+        .bg-circle:nth-child(1) {
+            width: 400px;
+            height: 400px;
+            top: -100px;
+            right: -100px;
+            background: rgba(0, 255, 178, 0.1);
+            animation-delay: 0s;
+        }
+
+        .bg-circle:nth-child(2) {
+            width: 300px;
+            height: 300px;
+            bottom: -50px;
+            left: -50px;
+            background: rgba(59, 130, 246, 0.1);
+            animation-delay: 5s;
+        }
+
+        .bg-circle:nth-child(3) {
+            width: 500px;
+            height: 500px;
+            bottom: 20%;
+            right: 10%;
+            background: rgba(255, 184, 0, 0.05);
+            animation-delay: 10s;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+            }
+            50% {
+                transform: translate(30px, -30px) scale(1.1);
+            }
+        }
+
+        /* Container */
+        .login-container {
+            width: 100%;
+            max-width: 1200px;
+            background: rgba(30, 30, 30, 0.7);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 40px;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+            z-index: 10;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: fadeIn 0.8s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Left Side */
+        .left-side {
+            flex: 1.2;
+            background: linear-gradient(135deg, rgba(0, 255, 178, 0.1), rgba(0, 0, 0, 0.3));
+            padding: 60px 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            border-right: 1px solid var(--border);
+        }
+
+        .left-side::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 30% 40%, var(--accent-glow) 0%, transparent 50%);
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .brand-content {
+            position: relative;
+            z-index: 2;
+        }
+
+        .logo-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 40px;
+        }
+
+        .logo-icon {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--accent), #00ccff);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            color: var(--primary);
+            box-shadow: 0 10px 25px var(--accent-glow);
+        }
+
+        .logo-text h1 {
+            font-size: 32px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff, var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 4px;
+        }
+
+        .logo-text p {
+            font-size: 14px;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+        }
+
+        .brand-title {
+            font-size: 42px;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #fff, var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-description {
+            font-size: 16px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            max-width: 450px;
+            margin-bottom: 40px;
+        }
+
+        .feature-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-primary);
+        }
+
+        .feature-item i {
+            width: 24px;
+            color: var(--accent);
+            font-size: 18px;
+        }
+
+        .feature-item span {
+            font-size: 15px;
+        }
+
+        /* Right Side */
+        .right-side {
+            flex: 1;
+            padding: 60px 50px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            background: rgba(10, 10, 10, 0.5);
+        }
+
+        .form-wrapper {
+            max-width: 400px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        .form-header {
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        .form-header h2 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #fff, var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .form-header p {
+            color: var(--text-secondary);
+            font-size: 15px;
+        }
+
+        /* Alert */
+        .alert {
+            background: rgba(255, 77, 77, 0.1);
+            border: 1px solid rgba(255, 77, 77, 0.3);
+            border-radius: 16px;
+            padding: 15px 20px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--danger);
+            animation: shake 0.5s ease;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+            20%, 40%, 60%, 80% { transform: translateX(5px); }
+        }
+
+        .alert i {
+            font-size: 18px;
+        }
+
+        /* Role Selection */
+        .role-section {
+            margin-bottom: 30px;
+        }
+
+        .role-section label {
+            display: block;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .role-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .role-card {
+            position: relative;
+            cursor: pointer;
+        }
+
+        .role-card input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .role-content {
+            background: var(--primary);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 20px 10px;
+            text-align: center;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .role-content::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .role-card input[type="radio"]:checked + .role-content {
+            border-color: var(--accent);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px var(--accent-glow);
+        }
+
+        .role-card input[type="radio"]:checked + .role-content::before {
+            opacity: 0.5;
+        }
+
+        .role-content i {
+            font-size: 28px;
+            margin-bottom: 10px;
+            display: block;
+            color: var(--text-secondary);
+        }
+
+        .role-card input[type="radio"]:checked + .role-content i {
+            color: var(--accent);
+        }
+
+        .role-content span {
+            font-size: 14px;
+            font-weight: 600;
+            display: block;
+            color: var(--text-primary);
+        }
+
+        /* Form Group */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .input-group {
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            font-size: 18px;
+            transition: color 0.3s;
+            z-index: 2;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 18px;
+            transition: color 0.3s;
+            z-index: 2;
+        }
+
+        .toggle-password:hover {
+            color: var(--accent);
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 16px 50px;
+            background: var(--primary);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 15px;
+            font-family: 'Space Grotesk', sans-serif;
+            color: var(--text-primary);
+            transition: all 0.3s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px var(--accent-glow);
+        }
+
+        .form-control:focus + .input-icon {
+            color: var(--accent);
+        }
+
+        .form-control::placeholder {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        /* Form Options */
+        .form-options {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 25px 0;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+
+        .forgot-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .forgot-link:hover {
+            text-decoration: underline;
+            filter: brightness(1.2);
+        }
+
+        /* Button */
+        .btn-login {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, var(--accent), #00ccff);
+            color: var(--primary);
+            border: none;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-login::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .btn-login:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn-login:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 30px var(--accent-glow);
+        }
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .btn-login i {
+            font-size: 18px;
+            transition: transform 0.3s;
+        }
+
+        .btn-login:hover i {
+            transform: translateX(5px);
+        }
+
+        /* Footer */
+        .form-footer {
+            margin-top: 40px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .form-footer p {
+            margin-bottom: 4px;
+        }
+
+        /* Loading */
+        .loading {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 10, 0.9);
+            backdrop-filter: blur(10px);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .loading.active {
+            display: flex;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid var(--border);
+            border-top: 3px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .left-side {
+                padding: 40px 30px;
+            }
+            .right-side {
+                padding: 40px 30px;
+            }
+            .brand-title {
+                font-size: 36px;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .login-container {
+                flex-direction: column;
+                max-width: 550px;
+            }
+
+            .left-side {
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+                text-align: center;
+            }
+
+            .brand-content {
+                text-align: center;
+            }
+
+            .logo-wrapper {
+                justify-content: center;
+            }
+
+            .brand-description {
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .feature-list {
+                align-items: center;
+            }
+
+            .feature-item {
+                width: fit-content;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .login-container {
+                border-radius: 30px;
+            }
+
+            .left-side, .right-side {
+                padding: 30px 20px;
+            }
+
+            .brand-title {
+                font-size: 28px;
+            }
+
+            .logo-icon {
+                width: 60px;
+                height: 60px;
+                font-size: 30px;
+            }
+
+            .logo-text h1 {
+                font-size: 28px;
+            }
+
+            .role-grid {
+                gap: 8px;
+            }
+
+            .role-content {
+                padding: 15px 5px;
+            }
+
+            .role-content i {
+                font-size: 22px;
+            }
+
+            .role-content span {
+                font-size: 12px;
+            }
+
+            .form-header h2 {
+                font-size: 28px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .role-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .role-content {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                text-align: left;
+                padding: 12px 15px;
+            }
+
+            .role-content i {
+                margin-bottom: 0;
+            }
+
+            .form-options {
+                flex-direction: column;
+                gap: 12px;
+                align-items: flex-start;
+            }
+
+            .brand-title {
+                font-size: 24px;
+            }
+
+            .brand-description {
+                font-size: 14px;
+            }
+        }
+
+        @media (max-width: 360px) {
+            .feature-item span {
+                font-size: 13px;
+            }
+
+            .btn-login {
+                padding: 14px;
+                font-size: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="bg-animation">
+        <div class="bg-circle"></div>
+        <div class="bg-circle"></div>
+        <div class="bg-circle"></div>
+    </div>
+
+    <!-- Loading Animation -->
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p style="color: var(--text-secondary);">Authenticating...</p>
+    </div>
+
+    <!-- Login Container -->
+    <div class="login-container">
+        <!-- Left Side -->
+        <div class="left-side">
+            <div class="brand-content">
+                <div class="logo-wrapper">
+                    <div class="logo-icon">
+                        <i class="fas fa-bolt"></i>
+                    </div>
+                    <div class="logo-text">
+                        <h1>majoo POS</h1>
+                        <p>ENTERPRISE</p>
+                    </div>
+                </div>
+
+                <h2 class="brand-title">Welcome Back!</h2>
+                <p class="brand-description">
+                    The most advanced Point of Sale system for modern businesses. 
+                    Manage your store with ease and efficiency.
+                </p>
+
+                <div class="feature-list">
+                    <div class="feature-item">
+                        <i class="fas fa-bolt"></i>
+                        <span>Lightning fast transactions</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Real-time analytics & reports</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Enterprise-grade security</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-sync-alt"></i>
+                        <span>Multi-device synchronization</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side -->
+        <div class="right-side">
+            <div class="form-wrapper">
+                <div class="form-header">
+                    <h2>Sign In</h2>
+                    <p>Enter your credentials to continue</p>
+                </div>
+
+                <?php if($error): ?>
+                    <div class="alert">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <?php echo $error; ?>
+                    </div>
+                <?php endif; ?>
+
+                <form method="POST" action="" id="loginForm">
+                    <!-- Role Selection -->
+                    <div class="role-section">
+                        <label>Select Role</label>
+                        <div class="role-grid">
+                            <label class="role-card">
+                                <input type="radio" name="role" value="admin" required>
+                                <div class="role-content">
+                                    <i class="fas fa-crown"></i>
+                                    <span>Admin</span>
+                                </div>
+                            </label>
+                            <label class="role-card">
+                                <input type="radio" name="role" value="kasir">
+                                <div class="role-content">
+                                    <i class="fas fa-cash-register"></i>
+                                    <span>Cashier</span>
+                                </div>
+                            </label>
+                            <label class="role-card">
+                                <input type="radio" name="role" value="owner">
+                                <div class="role-content">
+                                    <i class="fas fa-chart-pie"></i>
+                                    <span>Owner</span>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Username -->
+                    <div class="form-group">
+                        <label>Username</label>
+                        <div class="input-group">
+                            <i class="fas fa-user input-icon"></i>
+                            <input type="text" 
+                                   class="form-control" 
+                                   name="username" 
+                                   placeholder="Enter your username"
+                                   required>
+                        </div>
+                    </div>
+
+                    <!-- Password -->
+                    <div class="form-group">
+                        <label>Password</label>
+                        <div class="input-group">
+                            <i class="fas fa-lock input-icon"></i>
+                            <input type="password" 
+                                   class="form-control" 
+                                   name="password" 
+                                   placeholder="Enter your password"
+                                   required>
+                            <i class="fas fa-eye toggle-password" onclick="togglePassword()"></i>
+                        </div>
+                    </div>
+
+                    <!-- Options -->
+                    <div class="form-options">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="remember">
+                            <span>Remember me</span>
+                        </label>
+                        <a href="#" class="forgot-link">Forgot password?</a>
+                    </div>
+
+                    <!-- Login Button -->
+                    <button type="submit" class="btn-login" onclick="showLoading()">
+                        <span>Sign In</span>
+                        <i class="fas fa-arrow-right"></i>
+                    </button>
+                </form>
+
+                <div class="form-footer">
+                    <p>&copy; 2025 majoo POS. All rights reserved.</p>
+                    <p>Version 3.0.0 Enterprise</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Toggle Password
+        function togglePassword() {
+            const passwordInput = document.querySelector('input[name="password"]');
+            const toggleIcon = document.querySelector('.toggle-password');
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleIcon.classList.remove('fa-eye');
+                toggleIcon.classList.add('fa-eye-slash');
+            } else {
+                passwordInput.type = 'password';
+                toggleIcon.classList.remove('fa-eye-slash');
+                toggleIcon.classList.add('fa-eye');
+            }
+        }
+
+        // Show Loading
+        function showLoading() {
+            const form = document.getElementById('loginForm');
+            const roleSelected = document.querySelector('input[name="role"]:checked');
+            
+            if(form.checkValidity() && roleSelected) {
+                document.getElementById('loading').classList.add('active');
+            }
+        }
+
+        // Form Validation
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            const roleSelected = document.querySelector('input[name="role"]:checked');
+            
+            if(!roleSelected) {
+                e.preventDefault();
+                
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'alert';
+                alertDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> Please select your role!';
+                
+                const existingAlert = document.querySelector('.alert');
+                if(existingAlert) existingAlert.remove();
+                
+                const formHeader = document.querySelector('.form-header');
+                formHeader.insertAdjacentElement('afterend', alertDiv);
+                
+                setTimeout(() => {
+                    alertDiv.style.transition = 'opacity 0.5s';
+                    alertDiv.style.opacity = '0';
+                    setTimeout(() => alertDiv.remove(), 500);
+                }, 3000);
+            }
+        });
+
+        // Auto-hide alerts
+        setTimeout(() => {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                if(!alert.innerHTML.includes('Please select')) {
+                    alert.style.transition = 'opacity 0.5s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 500);
+                }
+            });
+        }, 5000);
+
+        // Role card hover effect
+        document.querySelectorAll('.role-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-2px)';
+            });
+            card.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0)';
+            });
+        });
+    </script>
+</body>
+</html>

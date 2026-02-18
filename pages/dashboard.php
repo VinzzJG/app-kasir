@@ -1,0 +1,1365 @@
+<?php
+session_start();
+require_once '../config/database.php';
+
+// Cek login
+if(!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit();
+}
+
+$user_id = $_SESSION['user_id'];
+$role = $_SESSION['role'];
+$nama_lengkap = $_SESSION['nama_lengkap'];
+
+// Ambil data untuk dashboard
+$tanggal = date('Y-m-d');
+
+// Total penjualan hari ini
+$query_penjualan = mysqli_query($conn, "SELECT COALESCE(SUM(grand_total), 0) as total FROM transaksi WHERE DATE(created_at) = '$tanggal' AND status = 'selesai'");
+$total_penjualan = 0;
+if($query_penjualan && mysqli_num_rows($query_penjualan) > 0) {
+    $row = mysqli_fetch_assoc($query_penjualan);
+    $total_penjualan = $row['total'];
+}
+
+// Jumlah transaksi hari ini
+$query_transaksi = mysqli_query($conn, "SELECT COUNT(*) as jumlah FROM transaksi WHERE DATE(created_at) = '$tanggal'");
+$jumlah_transaksi = 0;
+if($query_transaksi && mysqli_num_rows($query_transaksi) > 0) {
+    $row = mysqli_fetch_assoc($query_transaksi);
+    $jumlah_transaksi = $row['jumlah'];
+}
+
+// Total produk
+$query_produk = mysqli_query($conn, "SELECT COUNT(*) as jumlah FROM produk WHERE is_active = 1");
+$total_produk = 0;
+if($query_produk && mysqli_num_rows($query_produk) > 0) {
+    $row = mysqli_fetch_assoc($query_produk);
+    $total_produk = $row['jumlah'];
+}
+
+// Stok menipis
+$query_stok = mysqli_query($conn, "SELECT COUNT(*) as jumlah FROM produk WHERE stok <= stok_minimum");
+$stok_menipis = 0;
+if($query_stok && mysqli_num_rows($query_stok) > 0) {
+    $row = mysqli_fetch_assoc($query_stok);
+    $stok_menipis = $row['jumlah'];
+}
+
+// Query untuk metode pembayaran
+$query_payment = mysqli_query($conn, "SELECT 
+    SUM(CASE WHEN LOWER(metode_pembayaran) = 'cash' OR LOWER(metode_pembayaran) = 'tunai' OR metode_pembayaran = '' OR metode_pembayaran IS NULL THEN 1 ELSE 0 END) as cash_count,
+    SUM(CASE WHEN LOWER(metode_pembayaran) = 'qris' THEN 1 ELSE 0 END) as qris_count,
+    SUM(CASE WHEN LOWER(metode_pembayaran) = 'transfer' THEN 1 ELSE 0 END) as transfer_count
+    FROM transaksi WHERE DATE(created_at) = '$tanggal' AND status = 'selesai'");
+
+$cash = 0;
+$qris = 0;
+$transfer = 0;
+if($query_payment && mysqli_num_rows($query_payment) > 0) {
+    $payment_data = mysqli_fetch_assoc($query_payment);
+    $cash = (int)$payment_data['cash_count'];
+    $qris = (int)$payment_data['qris_count'];
+    $transfer = (int)$payment_data['transfer_count'];
+}
+
+// Produk terlaris
+$query_terlaris = mysqli_query($conn, "SELECT 
+    p.nama_produk,
+    k.nama_kategori,
+    COALESCE(SUM(dt.jumlah), 0) as terjual,
+    COALESCE(SUM(dt.subtotal), 0) as pendapatan
+    FROM produk p
+    LEFT JOIN kategori k ON p.kategori_id = k.id
+    LEFT JOIN detail_transaksi dt ON p.id = dt.produk_id
+    LEFT JOIN transaksi t ON dt.transaksi_id = t.id AND DATE(t.created_at) = '$tanggal'
+    GROUP BY p.id 
+    ORDER BY terjual DESC 
+    LIMIT 3");
+
+// Transaksi terbaru
+$query_transaksi_terbaru = mysqli_query($conn, "SELECT t.*, u.nama_lengkap as kasir
+    FROM transaksi t 
+    JOIN users u ON t.user_id = u.id 
+    WHERE DATE(t.created_at) = '$tanggal'
+    ORDER BY t.created_at DESC 
+    LIMIT 5");
+
+// Data untuk grafik penjualan 7 hari terakhir
+$labels_minggu = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+$data_minggu = [];
+
+for($i = 6; $i >= 0; $i--) {
+    $tgl = date('Y-m-d', strtotime("-$i days"));
+    $query = mysqli_query($conn, "SELECT COALESCE(SUM(grand_total), 0) as total FROM transaksi WHERE DATE(created_at) = '$tgl' AND status = 'selesai'");
+    $row = mysqli_fetch_assoc($query);
+    $data_minggu[] = (int)$row['total'];
+}
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>Dashboard - Kasir Majoo</title>
+    
+    <!-- Font Awesome 6 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #0A0A0A;
+            --secondary: #1E1E1E;
+            --accent: #00FFB2;
+            --accent-glow: rgba(0, 255, 178, 0.3);
+            --accent-soft: rgba(0, 255, 178, 0.1);
+            --text-primary: #FFFFFF;
+            --text-secondary: #A0A0A0;
+            --border: #2A2A2A;
+            --success: #00FFB2;
+            --warning: #FFB800;
+            --danger: #FF4D4D;
+            --info: #3B82F6;
+            --cash: #00FFB2;
+            --qris: #3B82F6;
+            --transfer: #A78BFA;
+        }
+
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background: var(--primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* Top Navigation */
+        .mobile-top-nav {
+            background: rgba(10, 10, 10, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .mobile-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .mobile-logo i {
+            font-size: 24px;
+            color: var(--accent);
+        }
+
+        .mobile-logo span {
+            font-weight: 600;
+            font-size: 18px;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #fff, var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .menu-toggle {
+            width: 42px;
+            height: 42px;
+            background: var(--secondary);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: -300px;
+            width: 300px;
+            height: 100vh;
+            background: var(--secondary);
+            z-index: 1000;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto;
+            border-right: 1px solid var(--border);
+        }
+
+        .sidebar.active {
+            left: 0;
+        }
+
+        .sidebar-header {
+            padding: 30px 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: var(--accent);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: var(--primary);
+        }
+
+        .logo-text h3 {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            color: var(--text-primary);
+        }
+
+        .logo-text p {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .user-info {
+            padding: 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .user-avatar {
+            width: 52px;
+            height: 52px;
+            background: linear-gradient(135deg, var(--accent), #00ccff);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: var(--primary);
+        }
+
+        .user-details h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .user-details small {
+            font-size: 13px;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .sidebar-menu {
+            padding: 24px;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 16px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 14px;
+            font-size: 15px;
+            font-weight: 500;
+            margin-bottom: 4px;
+            transition: all 0.2s;
+        }
+
+        .menu-item i {
+            width: 22px;
+            font-size: 18px;
+        }
+
+        .menu-item:hover {
+            background: var(--border);
+            color: var(--text-primary);
+        }
+
+        .menu-item.active {
+            background: var(--accent);
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .logout-mobile {
+            margin: 24px;
+            padding: 14px 20px;
+            background: rgba(255, 77, 77, 0.1);
+            border: 1px solid rgba(255, 77, 77, 0.2);
+            color: var(--danger);
+            text-decoration: none;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .logout-mobile i {
+            color: var(--danger);
+        }
+
+        /* Overlay */
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+            z-index: 999;
+            display: none;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 20px;
+        }
+
+        /* Welcome Card */
+        .welcome-card {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 30px;
+            padding: 20px;
+            margin-bottom: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .welcome-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            animation: rotate 20s linear infinite;
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .digital-clock {
+            background: var(--primary);
+            padding: 14px 28px;
+            border-radius: 50px;
+            font-size: 26px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            border: 1px solid var(--border);
+            color: var(--accent);
+            letter-spacing: 2px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .digital-clock i {
+            color: var(--accent);
+            font-size: 24px;
+        }
+
+        .quick-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+
+        .info-item {
+            background: var(--primary);
+            border: 1px solid var(--border);
+            padding: 12px 20px;
+            border-radius: 50px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .info-item i {
+            color: var(--accent);
+            font-size: 16px;
+        }
+
+        .info-item span {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .info-item small {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* STATS CARDS - TANPA ANIMASI */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            transition: transform 0.2s;
+        }
+
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100px;
+            height: 100px;
+            background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+            opacity: 0.3;
+        }
+
+        .stat-icon {
+            width: 45px;
+            height: 45px;
+            background: var(--primary);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 15px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-icon.blue { color: var(--info); }
+        .stat-icon.green { color: var(--success); }
+        .stat-icon.yellow { color: var(--warning); }
+        .stat-icon.purple { color: #A78BFA; }
+
+        .stat-info h4 {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-info p {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            line-height: 1.2;
+        }
+
+        .stat-info small {
+            font-size: 12px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .stat-info small i {
+            color: var(--accent);
+            font-size: 10px;
+        }
+
+        /* QUICK ACTIONS - HANYA EFEK SLIDE (::after) */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .quick-action-item {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 20px;
+            text-align: center;
+            text-decoration: none;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .quick-action-item::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+            transition: left 0.5s;
+        }
+
+        .quick-action-item:hover::after {
+            left: 100%;
+        }
+
+        .quick-action-item:hover {
+            transform: translateY(-5px);
+        }
+
+        .quick-action-item i {
+            font-size: 32px;
+            color: var(--accent);
+            margin-bottom: 12px;
+        }
+
+        .quick-action-item span {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .quick-action-item small {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Charts Row */
+        .charts-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .chart-card {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 20px;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .chart-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chart-header h3 i {
+            color: var(--accent);
+        }
+
+        .badge-date {
+            background: var(--primary);
+            padding: 6px 12px;
+            border-radius: 30px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .chart-container {
+            height: 200px;
+            width: 100%;
+        }
+
+        /* Stats Mini */
+        .stats-mini {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border);
+        }
+
+        .stats-mini-item {
+            text-align: center;
+            background: var(--primary);
+            padding: 10px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .stats-mini-item .value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .stats-mini-item .label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-top: 3px;
+        }
+
+        /* Tables Row */
+        .tables-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .table-card {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 20px;
+        }
+
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .table-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .table-header h3 i {
+            color: var(--accent);
+        }
+
+        .btn-view {
+            background: var(--primary);
+            border: 1px solid var(--border);
+            padding: 8px 16px;
+            border-radius: 30px;
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-view:hover {
+            background: var(--accent);
+            color: var(--primary);
+        }
+
+        .product-list, .transaction-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .product-item, .transaction-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .product-item:last-child, .transaction-item:last-child {
+            border-bottom: none;
+        }
+
+        .product-info h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .product-info small {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .product-stats {
+            text-align: right;
+        }
+
+        .product-stats .price {
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--accent);
+            margin-bottom: 3px;
+        }
+
+        .product-stats .qty {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .badge {
+            padding: 5px 12px;
+            border-radius: 30px;
+            font-size: 10px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .badge.cash { 
+            background: rgba(0, 255, 178, 0.1); 
+            color: var(--cash);
+            border: 1px solid rgba(0, 255, 178, 0.2);
+        }
+        
+        .badge.qris { 
+            background: rgba(59, 130, 246, 0.1); 
+            color: var(--qris);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        
+        .badge.transfer { 
+            background: rgba(167, 139, 250, 0.1); 
+            color: var(--transfer);
+            border: 1px solid rgba(167, 139, 250, 0.2);
+        }
+
+        .badge i {
+            font-size: 10px;
+        }
+
+        .amount {
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            color: var(--border);
+            margin-bottom: 15px;
+        }
+
+        .empty-state p {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 15px;
+        }
+
+        .btn-empty {
+            background: var(--accent);
+            color: var(--primary);
+            padding: 12px 24px;
+            border-radius: 40px;
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        /* Floating Action Button */
+        .fab {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: var(--accent);
+            border-radius: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+            font-size: 26px;
+            box-shadow: 0 8px 25px var(--accent-glow);
+            z-index: 90;
+            cursor: pointer;
+            font-weight: 600;
+            border: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .quick-actions {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .charts-row {
+                grid-template-columns: 1fr;
+            }
+            .tables-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (min-width: 768px) {
+            .mobile-top-nav,
+            .fab {
+                display: none;
+            }
+            .sidebar {
+                left: 0;
+                width: 280px;
+            }
+            .main-content {
+                margin-left: 280px;
+                padding: 30px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .quick-actions {
+                grid-template-columns: 1fr;
+            }
+            .welcome-card {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .quick-info {
+                justify-content: space-between;
+            }
+            .digital-clock {
+                font-size: 22px;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .chart-container {
+                height: 180px;
+            }
+            .stat-info p {
+                font-size: 22px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Overlay -->
+    <div class="overlay" id="overlay" onclick="closeMenu()"></div>
+
+    <!-- Mobile Top Navigation -->
+    <div class="mobile-top-nav">
+        <div class="mobile-logo">
+            <i class="fas fa-bolt"></i>
+            <span>majoo POS</span>
+        </div>
+        <div class="menu-toggle" onclick="toggleMenu()">
+            <i class="fas fa-bars"></i>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <div class="logo-text">
+                    <h3>majoo POS</h3>
+                    <p>Enterprise v3.0</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="user-info">
+            <div class="user-avatar">
+                <i class="fas fa-user"></i>
+            </div>
+            <div class="user-details">
+                <h4><?php echo htmlspecialchars($nama_lengkap); ?></h4>
+                <small>⚡ <?php echo ucfirst($role); ?></small>
+            </div>
+        </div>
+
+        <div class="sidebar-menu">
+            <a href="dashboard.php" class="menu-item active">
+                <i class="fas fa-chart-pie"></i> Dashboard
+            </a>
+            
+            <?php if($role == 'admin' || $role == 'kasir'): ?>
+            <a href="kasir.php" class="menu-item">
+                <i class="fas fa-credit-card"></i> POS
+            </a>
+            <?php endif; ?>
+
+            <?php if($role == 'admin'): ?>
+            <a href="produk.php" class="menu-item">
+                <i class="fas fa-cube"></i> Products
+            </a>
+            <a href="stok.php" class="menu-item">
+                <i class="fas fa-boxes"></i> Inventory
+            </a>
+            <?php endif; ?>
+
+            <?php if($role == 'admin' || $role == 'owner'): ?>
+            <a href="laporan.php" class="menu-item">
+                <i class="fas fa-chart-line"></i> Reports
+            </a>
+            <?php endif; ?>
+
+            <?php if($role == 'admin'): ?>
+            <a href="karyawan.php" class="menu-item">
+                <i class="fas fa-users"></i> Employees
+            </a>
+            <a href="pengaturan.php" class="menu-item">
+                <i class="fas fa-cog"></i> Settings
+            </a>
+            <?php endif; ?>
+        </div>
+
+        <a href="logout.php" class="logout-mobile">
+            <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Welcome Card -->
+        <div class="welcome-card">
+            <div class="digital-clock" id="digitalClock">
+                <i class="fas fa-clock"></i>
+                <span id="clockTime">--:--:--</span>
+            </div>
+            
+            <div class="quick-info">
+                <div class="info-item">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Rp <?php echo number_format($total_penjualan, 0, ',', '.'); ?></span>
+                    <small>today</small>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-repeat"></i>
+                    <span><?php echo $jumlah_transaksi; ?></span>
+                    <small>transactions</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- STATS CARDS - TANPA ANIMASI -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">
+                    <i class="fas fa-chart-bar"></i>
+                </div>
+                <div class="stat-info">
+                    <h4>TOTAL SALES</h4>
+                    <p>Rp <?php echo number_format($total_penjualan, 0, ',', '.'); ?></p>
+                    <small><i class="fas fa-circle"></i> <?php echo $jumlah_transaksi; ?> transactions</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon green">
+                    <i class="fas fa-cube"></i>
+                </div>
+                <div class="stat-info">
+                    <h4>PRODUCTS</h4>
+                    <p><?php echo $total_produk; ?></p>
+                    <small><i class="fas fa-circle"></i> Active items</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon yellow">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <div class="stat-info">
+                    <h4>LOW STOCK</h4>
+                    <p><?php echo $stok_menipis; ?></p>
+                    <small><i class="fas fa-circle"></i> Need reorder</small>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon purple">
+                    <i class="fas fa-credit-card"></i>
+                </div>
+                <div class="stat-info">
+                    <h4>PAYMENTS</h4>
+                    <p><?php echo $cash + $qris + $transfer; ?></p>
+                    <small><i class="fas fa-circle"></i> Today's count</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- QUICK ACTIONS - HANYA EFEK SLIDE (::after) -->
+        <div class="quick-actions">
+            <a href="kasir.php" class="quick-action-item">
+                <i class="fas fa-plus-circle"></i>
+                <span>New Sale</span>
+                <small>Process payment</small>
+            </a>
+            <a href="produk.php" class="quick-action-item">
+                <i class="fas fa-cube"></i>
+                <span>Add Product</span>
+                <small>Inventory</small>
+            </a>
+            <a href="stok.php" class="quick-action-item">
+                <i class="fas fa-boxes"></i>
+                <span>Stock In</span>
+                <small>Receive items</small>
+            </a>
+            <a href="laporan.php" class="quick-action-item">
+                <i class="fas fa-chart-line"></i>
+                <span>Reports</span>
+                <small>Analytics</small>
+            </a>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-row">
+            <!-- Sales Chart -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3><i class="fas fa-chart-line"></i> Sales Overview</h3>
+                    <span class="badge-date">Last 7 days</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="salesChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Payment Methods -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3><i class="fas fa-credit-card"></i> Payment Methods</h3>
+                </div>
+                <div class="chart-container">
+                    <canvas id="paymentChart"></canvas>
+                </div>
+                <div class="stats-mini">
+                    <div class="stats-mini-item">
+                        <div class="value"><?php echo $cash; ?></div>
+                        <div class="label">Cash</div>
+                    </div>
+                    <div class="stats-mini-item">
+                        <div class="value"><?php echo $qris; ?></div>
+                        <div class="label">QRIS</div>
+                    </div>
+                    <div class="stats-mini-item">
+                        <div class="value"><?php echo $transfer; ?></div>
+                        <div class="label">Transfer</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tables -->
+        <div class="tables-row">
+            <!-- Top Products -->
+            <div class="table-card">
+                <div class="table-header">
+                    <h3><i class="fas fa-fire"></i> Top Products</h3>
+                    <a href="laporan.php" class="btn-view">View All</a>
+                </div>
+                
+                <?php if($query_terlaris && mysqli_num_rows($query_terlaris) > 0): ?>
+                    <div class="product-list">
+                        <?php while($row = mysqli_fetch_assoc($query_terlaris)): ?>
+                            <?php if($row['terjual'] > 0): ?>
+                            <div class="product-item">
+                                <div class="product-info">
+                                    <h4><?php echo htmlspecialchars($row['nama_produk']); ?></h4>
+                                    <small><?php echo htmlspecialchars($row['nama_kategori']); ?></small>
+                                </div>
+                                <div class="product-stats">
+                                    <div class="price">Rp <?php echo number_format($row['pendapatan'], 0, ',', '.'); ?></div>
+                                    <div class="qty"><?php echo $row['terjual']; ?> sold</div>
+                                </div>
+                            </div>
+                            <?php endif; ?>
+                        <?php endwhile; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-shopping-cart"></i>
+                        <p>No sales today</p>
+                        <a href="kasir.php" class="btn-empty">Start Selling</a>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- Recent Transactions with ICONS -->
+            <div class="table-card">
+                <div class="table-header">
+                    <h3><i class="fas fa-clock"></i> Recent Transactions</h3>
+                    <a href="laporan.php" class="btn-view">View All</a>
+                </div>
+                
+                <?php if($query_transaksi_terbaru && mysqli_num_rows($query_transaksi_terbaru) > 0): ?>
+                    <div class="transaction-list">
+                        <?php while($row = mysqli_fetch_assoc($query_transaksi_terbaru)): ?>
+                        <div class="transaction-item">
+                            <div class="product-info">
+                                <h4><?php echo $row['no_transaksi']; ?></h4>
+                                <small><?php echo date('H:i', strtotime($row['created_at'])); ?> | <?php echo htmlspecialchars($row['kasir']); ?></small>
+                            </div>
+                            <div>
+                                <div class="amount">Rp <?php echo number_format($row['grand_total'], 0, ',', '.'); ?></div>
+                                <?php 
+                                $badge_class = 'cash';
+                                $badge_text = 'Cash';
+                                $badge_icon = 'fa-money-bill-wave';
+                                
+                                // Cek metode pembayaran
+                                $metode = strtolower(trim($row['metode_pembayaran']));
+                                
+                                if($metode == 'qris') {
+                                    $badge_class = 'qris';
+                                    $badge_text = 'QRIS';
+                                    $badge_icon = 'fa-qrcode';
+                                } elseif($metode == 'transfer') {
+                                    $badge_class = 'transfer';
+                                    $badge_text = 'Transfer';
+                                    $badge_icon = 'fa-credit-card';
+                                } elseif($metode == 'cash' || $metode == 'tunai' || $metode == '') {
+                                    $badge_class = 'cash';
+                                    $badge_text = 'Cash';
+                                    $badge_icon = 'fa-money-bill-wave';
+                                } else {
+                                    $badge_class = 'cash';
+                                    $badge_text = 'Cash';
+                                    $badge_icon = 'fa-money-bill-wave';
+                                }
+                                ?>
+                                <span class="badge <?php echo $badge_class; ?>">
+                                    <i class="fas <?php echo $badge_icon; ?>"></i>
+                                    <?php echo $badge_text; ?>
+                                </span>
+                            </div>
+                        </div>
+                        <?php endwhile; ?>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state">
+                        <i class="fas fa-receipt"></i>
+                        <p>No transactions today</p>
+                        <a href="kasir.php" class="btn-empty">New Transaction</a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Action Button -->
+    <div class="fab" onclick="window.location.href='kasir.php'">
+        <i class="fas fa-bolt"></i>
+    </div>
+
+    <script>
+        function toggleMenu() {
+            document.getElementById('sidebar').classList.toggle('active');
+            document.getElementById('overlay').classList.toggle('active');
+            document.body.style.overflow = document.getElementById('sidebar').classList.contains('active') ? 'hidden' : '';
+        }
+
+        function closeMenu() {
+            document.getElementById('sidebar').classList.remove('active');
+            document.getElementById('overlay').classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        // Digital Clock
+        function updateClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            document.getElementById('clockTime').textContent = `${hours}:${minutes}:${seconds}`;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // Sales Chart
+        const salesCtx = document.getElementById('salesChart').getContext('2d');
+        new Chart(salesCtx, {
+            type: 'line',
+            data: {
+                labels: <?php echo json_encode($labels_minggu); ?>,
+                datasets: [{
+                    data: <?php echo json_encode($data_minggu); ?>,
+                    borderColor: '#00FFB2',
+                    backgroundColor: 'rgba(0, 255, 178, 0.1)',
+                    borderWidth: 3,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#00FFB2'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { 
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return 'Rp ' + context.raw.toLocaleString('id-ID');
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: { 
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        ticks: { 
+                            callback: function(value) {
+                                if(value >= 1000000) return 'Rp' + (value/1000000).toFixed(1) + 'M';
+                                if(value >= 1000) return 'Rp' + (value/1000).toFixed(0) + 'K';
+                                return 'Rp' + value;
+                            }
+                        }
+                    },
+                    x: { 
+                        grid: { display: false },
+                        ticks: { color: '#A0A0A0' }
+                    }
+                }
+            }
+        });
+
+        // Payment Chart
+        const paymentCtx = document.getElementById('paymentChart').getContext('2d');
+        
+        const cashData = <?php echo $cash; ?>;
+        const qrisData = <?php echo $qris; ?>;
+        const transferData = <?php echo $transfer; ?>;
+
+        new Chart(paymentCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Cash', 'QRIS', 'Transfer'],
+                datasets: [{
+                    data: [cashData, qrisData, transferData],
+                    backgroundColor: ['#00FFB2', '#3B82F6', '#A78BFA'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '70%',
+                plugins: { 
+                    legend: { 
+                        position: 'bottom',
+                        labels: { 
+                            color: '#A0A0A0',
+                            font: { size: 11 }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                let value = context.raw || 0;
+                                let total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                let percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                return `${label}: ${value} (${percentage}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Close menu on link click
+        document.querySelectorAll('.menu-item, .logout-mobile').forEach(item => {
+            item.addEventListener('click', function() {
+                if (window.innerWidth < 768) closeMenu();
+            });
+        });
+
+        // Touch effects
+        if('ontouchstart' in window) {
+            document.querySelectorAll('.quick-action-item, .fab').forEach(el => {
+                el.addEventListener('touchstart', function() {
+                    this.style.opacity = '0.7';
+                });
+                el.addEventListener('touchend', function() {
+                    this.style.opacity = '1';
+                });
+            });
+        }
+    </script>
+</body>
+</html>
